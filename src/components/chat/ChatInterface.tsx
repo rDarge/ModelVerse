@@ -10,7 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useToast } from '@/hooks/use-toast';
-import { SendHorizonal, LoaderCircle, Paperclip, X } from 'lucide-react'; 
+import { SendHorizonal, LoaderCircle, Paperclip, X, Trash2 } from 'lucide-react';
 
 interface Message {
   id: string;
@@ -22,21 +22,24 @@ interface Message {
 const availableModels = [
   { name: 'Gemini 1.5 Flash', id: 'googleai/gemini-1.5-flash-latest' },
   // Update multimodal model when available, e.g. Gemini 1.5 Pro
-  // { name: 'Gemini 1.5 Pro (Multimodal)', id: 'googleai/gemini-1.5-pro-latest' }, 
+  // { name: 'Gemini 1.5 Pro (Multimodal)', id: 'googleai/gemini-1.5-pro-latest' },
   { name: 'OpenAI GPT-3.5 Turbo', id: 'openai/gpt-3.5-turbo' },
   { name: 'Anthropic Claude 3 Haiku', id: 'anthropic/claude-3-haiku-20240307' },
 ];
 
+const initialSystemMessage = 'Welcome to ModelVerse! Select a model, type a message, or upload an image to start chatting.';
+const clearedSystemMessage = 'Chat cleared. Select a model and send a message to start a new conversation.';
+
 const ChatInterface = () => {
   const [messages, setMessages] = useState<Message[]>([
-    { id: crypto.randomUUID(), sender: 'system', text: 'Welcome to ModelVerse! Select a model, type a message, or upload an image to start chatting.' }
+    { id: crypto.randomUUID(), sender: 'system', text: initialSystemMessage }
   ]);
   const [inputValue, setInputValue] = useState('');
   const [selectedModel, setSelectedModel] = useState<string>(availableModels[0].id);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
-  
+
   const { toast } = useToast();
   const scrollViewportRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -93,40 +96,37 @@ const ChatInterface = () => {
       imageUrl: currentImagePreview || undefined,
     };
     setMessages((prevMessages) => [...prevMessages, userMessage]);
-    
+
     setInputValue('');
     // Keep selectedFile and imagePreview for this send, clear after
     setIsLoading(true);
 
     try {
-      // Prepare history from messages *before* the current one.
-      // System messages are excluded from the history sent to the AI.
       const historyForAI: ChatTurn[] = messages
         .filter(msg => msg.sender === 'user' || msg.sender === 'ai')
         .map(msg => ({
           role: msg.sender === 'user' ? 'user' : 'model',
           text: msg.text.trim() === "" ? undefined : msg.text.trim(),
-          photoDataUri: msg.imageUrl, // imageUrl is already a data URI or undefined
+          photoDataUri: msg.imageUrl,
         }))
-        .filter(turn => turn.text || turn.photoDataUri); // Filter out entirely empty turns from history
+        .filter(turn => turn.text || turn.photoDataUri);
 
 
       const input: RelayUserPromptInput = {
-        prompt: currentUserInput.trim(), // Current text prompt
+        prompt: currentUserInput.trim(),
         model: selectedModel,
-        history: historyForAI, // History up to this point
+        history: historyForAI,
       };
 
-      if (currentImagePreview) { // Image for the *current* message
+      if (currentImagePreview) {
         input.photoDataUri = currentImagePreview;
       }
-      
+
       const result = await relayUserPrompt(input);
       const aiMessage: Message = {
         id: crypto.randomUUID(),
         sender: 'ai',
         text: result.response,
-        // AI image responses are not handled by this flow currently
       };
       setMessages((prevMessages) => [...prevMessages, aiMessage]);
     } catch (error) {
@@ -143,16 +143,25 @@ const ChatInterface = () => {
       });
     } finally {
       setIsLoading(false);
-      // Clear image selection after message is sent
-      removeImage(); 
+      removeImage();
     }
+  };
+
+  const handleClearChat = () => {
+    setMessages([{ id: crypto.randomUUID(), sender: 'system', text: clearedSystemMessage }]);
+    setInputValue('');
+    removeImage();
+    toast({
+      title: 'Chat Cleared',
+      description: 'The conversation history has been cleared.',
+    });
   };
 
   return (
     <div className="flex flex-col h-full bg-card">
-      <div className="p-4 border-b border-border">
+      <div className="p-4 border-b border-border flex items-center justify-center sm:justify-between gap-2">
         <Select value={selectedModel} onValueChange={setSelectedModel} disabled={isLoading}>
-          <SelectTrigger className="w-full sm:w-[280px] mx-auto bg-background">
+          <SelectTrigger className="w-full max-w-[280px] bg-background">
             <SelectValue placeholder="Select a model" />
           </SelectTrigger>
           <SelectContent>
@@ -163,6 +172,16 @@ const ChatInterface = () => {
             ))}
           </SelectContent>
         </Select>
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={handleClearChat}
+          disabled={isLoading}
+          aria-label="Clear chat history"
+          className="shrink-0"
+        >
+          <Trash2 />
+        </Button>
       </div>
 
       <ScrollArea className="flex-grow p-4" viewportRef={scrollViewportRef}>
