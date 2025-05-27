@@ -11,6 +11,7 @@
  */
 
 import {ai} from '@/ai/genkit';
+import {GenerateOptions, MessageData, Part} from 'genkit';
 import {z} from 'genkit';
 
 const ChatTurnSchema = z.object({
@@ -48,15 +49,13 @@ const relayUserPromptFlow = ai.defineFlow(
     outputSchema: RelayUserPromptOutputSchema,
   },
   async (input) => {
-    const { prompt: currentPromptText, photoDataUri: currentPhotoDataUri, model, history } = input;
+    const { prompt: currentPromptText, photoDataUri: currentPhotoDataUri, model, history: pastHistoryTurns } = input;
 
-    // Genkit expects MessageData[] which is { role: Role; content: Part[]; }[]
-    const conversationTurnsForAI: ({ role: 'user' | 'model'; content: any[] })[] = [];
-
-    // Process past history
-    if (history) {
-      for (const turn of history) {
-        const historicalTurnContentParts: any[] = [];
+    // 1. Prepare past history for the 'messages' field (MessageData[])
+    const pastMessagesForAI: MessageData[] = [];
+    if (pastHistoryTurns) {
+      for (const turn of pastHistoryTurns) {
+        const historicalTurnContentParts: Part[] = [];
         if (turn.text && turn.text.trim() !== "") {
           historicalTurnContentParts.push({ text: turn.text.trim() });
         }
@@ -65,38 +64,43 @@ const relayUserPromptFlow = ai.defineFlow(
         }
         // Only add a turn to history if it has actual content
         if (historicalTurnContentParts.length > 0) {
-          conversationTurnsForAI.push({ role: turn.role, content: historicalTurnContentParts });
+          pastMessagesForAI.push({ role: turn.role, content: historicalTurnContentParts });
         }
       }
     }
 
-    // Current user turn - this is the new message being sent
-    const currentUserContentParts: any[] = [];
+    // 2. Prepare current prompt for the 'prompt' field (Part[])
+    const currentPromptPartsForAI: Part[] = [];
     const trimmedCurrentPromptText = currentPromptText?.trim();
     // Use a default prompt only if there's an image and no text.
     const effectiveCurrentPromptText = trimmedCurrentPromptText || (currentPhotoDataUri && !trimmedCurrentPromptText ? "Describe this image." : "");
 
     if (effectiveCurrentPromptText) {
-      currentUserContentParts.push({ text: effectiveCurrentPromptText });
+      currentPromptPartsForAI.push({ text: effectiveCurrentPromptText });
     }
     if (currentPhotoDataUri) {
-      currentUserContentParts.push({ media: { url: currentPhotoDataUri } });
+      currentPromptPartsForAI.push({ media: { url: currentPhotoDataUri } });
     }
 
-    // Add current user turn to the conversation history if it has content
-    if (currentUserContentParts.length > 0) {
-      conversationTurnsForAI.push({ role: 'user', content: currentUserContentParts });
-    }
-
-    // If, after processing history and current input, there's nothing to send.
-    if (conversationTurnsForAI.length === 0) {
+    // If there's no current prompt (neither text nor image) AND no history, then it's an empty request.
+    if (currentPromptPartsForAI.length === 0 && pastMessagesForAI.length === 0) {
         return { response: "Please provide a prompt or an image." };
     }
     
-    const {text} = await ai.generate({
-      prompt: conversationTurnsForAI, // This should now be correctly formatted as MessageData[]
+    // Construct GenerateOptions
+    // Note: Explicitly typing GenerateOptions can be tricky due to its generic nature with CustomOptions.
+    // Using 'any' here for simplicity, but in a larger project, you might define a more specific type.
+    const generateOptions: GenerateOptions<any, any> = {
       model: model,
-    });
+      prompt: currentPromptPartsForAI, // Current input as Part[]
+    };
+
+    if (pastMessagesForAI.length > 0) {
+      generateOptions.messages = pastMessagesForAI; // Past history as MessageData[]
+    }
+    
+    const {text} = await ai.generate(generateOptions);
+    
     return {response: text!};
   }
 );
