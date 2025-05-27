@@ -1,7 +1,7 @@
 
 "use client";
 
-import type { FC } from 'react';
+import React, { type FC } from 'react'; // Import React
 import { Bot, User } from 'lucide-react';
 import Image from 'next/image';
 import { cn } from '@/lib/utils';
@@ -77,4 +77,5 @@ const ChatMessage: FC<ChatMessageProps> = ({ sender, text, avatarUrl, imageUrl }
   );
 };
 
-export default ChatMessage;
+// Wrap ChatMessage with React.memo
+export default React.memo(ChatMessage);
