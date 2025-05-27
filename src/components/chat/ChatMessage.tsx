@@ -1,7 +1,9 @@
+
 "use client";
 
 import type { FC } from 'react';
 import { Bot, User } from 'lucide-react';
+import Image from 'next/image';
 import { cn } from '@/lib/utils';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 
@@ -9,9 +11,10 @@ interface ChatMessageProps {
   sender: 'user' | 'ai' | 'system';
   text: string;
   avatarUrl?: string;
+  imageUrl?: string;
 }
 
-const ChatMessage: FC<ChatMessageProps> = ({ sender, text, avatarUrl }) => {
+const ChatMessage: FC<ChatMessageProps> = ({ sender, text, avatarUrl, imageUrl }) => {
   const isUser = sender === 'user';
   const isSystem = sender === 'system';
 
@@ -35,7 +38,7 @@ const ChatMessage: FC<ChatMessageProps> = ({ sender, text, avatarUrl }) => {
   return (
     <div className={cn('flex items-end gap-2 my-3', messageAlignment)}>
       {!isUser && (
-        <Avatar className="h-8 w-8">
+        <Avatar className="h-8 w-8 self-start">
           {avatarUrl ? <AvatarImage src={avatarUrl} alt="AI Avatar" data-ai-hint="robot face" /> : null}
           <AvatarFallback className="bg-secondary text-secondary-foreground">
             <Bot size={20} />
@@ -43,15 +46,27 @@ const ChatMessage: FC<ChatMessageProps> = ({ sender, text, avatarUrl }) => {
         </Avatar>
       )}
       <div className={messageBubbleStyle}>
-        {text.split('\n').map((line, index, arr) => (
+        {text && text.split('\n').map((line, index, arr) => (
           <span key={index}>
             {line}
-            {index < arr.length -1 && <br />}
+            {index < arr.length - 1 && <br />}
           </span>
         ))}
+        {imageUrl && (
+          <div className={`relative mt-2 w-full max-w-xs h-auto aspect-[4/3] rounded-md overflow-hidden ${!text ? 'mt-0' : ''}`}>
+            <Image
+              src={imageUrl}
+              alt={sender === 'user' ? "User upload" : "AI generated image"}
+              layout="fill"
+              objectFit="contain"
+              className="rounded-md"
+              data-ai-hint={sender === 'user' ? "user upload" : "generated image"}
+            />
+          </div>
+        )}
       </div>
       {isUser && (
-        <Avatar className="h-8 w-8">
+        <Avatar className="h-8 w-8 self-start">
            {avatarUrl ? <AvatarImage src={avatarUrl} alt="User Avatar" data-ai-hint="person silhouette" /> : null}
           <AvatarFallback className="bg-accent text-accent-foreground">
             <User size={20} />
