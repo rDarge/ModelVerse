@@ -3,7 +3,7 @@
 
 import { useState, useRef, useEffect, type FormEvent, type ChangeEvent } from 'react';
 import Image from 'next/image';
-import { relayUserPrompt, type RelayUserPromptInput } from '@/ai/flows/relay-user-prompt';
+import { relayUserPrompt, type RelayUserPromptInput, type ChatTurn } from '@/ai/flows/relay-user-prompt';
 import ChatMessage from './ChatMessage';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -84,7 +84,7 @@ const ChatInterface = () => {
     if ((!inputValue.trim() && !selectedFile) || isLoading) return;
 
     const currentUserInput = inputValue;
-    const currentImagePreview = imagePreview;
+    const currentImagePreview = imagePreview; // This is the data URI for the new image
 
     const userMessage: Message = {
       id: crypto.randomUUID(),
@@ -99,16 +99,26 @@ const ChatInterface = () => {
     setIsLoading(true);
 
     try {
+      // Prepare history from messages *before* the current one.
+      // System messages are excluded from the history sent to the AI.
+      const historyForAI: ChatTurn[] = messages
+        .filter(msg => msg.sender === 'user' || msg.sender === 'ai')
+        .map(msg => ({
+          role: msg.sender === 'user' ? 'user' : 'model',
+          text: msg.text.trim() === "" ? undefined : msg.text.trim(),
+          photoDataUri: msg.imageUrl, // imageUrl is already a data URI or undefined
+        }))
+        .filter(turn => turn.text || turn.photoDataUri); // Filter out entirely empty turns from history
+
+
       const input: RelayUserPromptInput = {
-        prompt: currentUserInput.trim(),
+        prompt: currentUserInput.trim(), // Current text prompt
         model: selectedModel,
+        history: historyForAI, // History up to this point
       };
-      if (currentImagePreview) {
+
+      if (currentImagePreview) { // Image for the *current* message
         input.photoDataUri = currentImagePreview;
-        // If there's an image but no text prompt, use a default one.
-        if (!input.prompt) {
-          input.prompt = "Describe this image.";
-        }
       }
       
       const result = await relayUserPrompt(input);
@@ -116,6 +126,7 @@ const ChatInterface = () => {
         id: crypto.randomUUID(),
         sender: 'ai',
         text: result.response,
+        // AI image responses are not handled by this flow currently
       };
       setMessages((prevMessages) => [...prevMessages, aiMessage]);
     } catch (error) {
