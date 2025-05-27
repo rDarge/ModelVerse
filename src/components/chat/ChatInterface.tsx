@@ -158,7 +158,7 @@ const ChatInterface = () => {
   };
 
   return (
-    <div className="flex flex-col h-full bg-card">
+    <div className="flex flex-col flex-1 bg-card min-h-0">
       <div className="p-4 border-b border-border flex items-center justify-center sm:justify-between gap-2">
         <Select value={selectedModel} onValueChange={setSelectedModel} disabled={isLoading}>
           <SelectTrigger className="w-full max-w-[280px] bg-background">
@@ -184,7 +184,7 @@ const ChatInterface = () => {
         </Button>
       </div>
 
-      <ScrollArea className="flex-grow p-4" viewportRef={scrollViewportRef}>
+      <ScrollArea className="flex-1 min-h-0 p-4" viewportRef={scrollViewportRef}>
         <div className="space-y-4">
           {messages.map((msg) => (
             <ChatMessage key={msg.id} sender={msg.sender} text={msg.text} imageUrl={msg.imageUrl} />
