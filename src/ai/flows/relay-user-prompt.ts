@@ -50,41 +50,42 @@ const relayUserPromptFlow = ai.defineFlow(
   async (input) => {
     const { prompt: currentPromptText, photoDataUri: currentPhotoDataUri, model, history } = input;
 
-    const conversationTurnsForAI: ({ role: 'user' | 'model'; parts: any[] })[] = [];
+    // Genkit expects MessageData[] which is { role: Role; content: Part[]; }[]
+    const conversationTurnsForAI: ({ role: 'user' | 'model'; content: any[] })[] = [];
 
     // Process past history
     if (history) {
       for (const turn of history) {
-        const parts: any[] = [];
+        const historicalTurnContentParts: any[] = [];
         if (turn.text && turn.text.trim() !== "") {
-          parts.push({ text: turn.text.trim() });
+          historicalTurnContentParts.push({ text: turn.text.trim() });
         }
         if (turn.photoDataUri) {
-          parts.push({ media: { url: turn.photoDataUri } });
+          historicalTurnContentParts.push({ media: { url: turn.photoDataUri } });
         }
         // Only add a turn to history if it has actual content
-        if (parts.length > 0) {
-          conversationTurnsForAI.push({ role: turn.role, parts });
+        if (historicalTurnContentParts.length > 0) {
+          conversationTurnsForAI.push({ role: turn.role, content: historicalTurnContentParts });
         }
       }
     }
 
     // Current user turn - this is the new message being sent
-    const currentUserParts: any[] = [];
+    const currentUserContentParts: any[] = [];
     const trimmedCurrentPromptText = currentPromptText?.trim();
     // Use a default prompt only if there's an image and no text.
-    const effectiveCurrentPromptText = trimmedCurrentPromptText || (currentPhotoDataUri && !trimmedCurrentPromptText ? "Describe this image." : ""); 
+    const effectiveCurrentPromptText = trimmedCurrentPromptText || (currentPhotoDataUri && !trimmedCurrentPromptText ? "Describe this image." : "");
 
     if (effectiveCurrentPromptText) {
-      currentUserParts.push({ text: effectiveCurrentPromptText });
+      currentUserContentParts.push({ text: effectiveCurrentPromptText });
     }
     if (currentPhotoDataUri) {
-      currentUserParts.push({ media: { url: currentPhotoDataUri } });
+      currentUserContentParts.push({ media: { url: currentPhotoDataUri } });
     }
 
     // Add current user turn to the conversation history if it has content
-    if (currentUserParts.length > 0) {
-      conversationTurnsForAI.push({ role: 'user', parts: currentUserParts });
+    if (currentUserContentParts.length > 0) {
+      conversationTurnsForAI.push({ role: 'user', content: currentUserContentParts });
     }
 
     // If, after processing history and current input, there's nothing to send.
@@ -93,7 +94,7 @@ const relayUserPromptFlow = ai.defineFlow(
     }
     
     const {text} = await ai.generate({
-      prompt: conversationTurnsForAI,
+      prompt: conversationTurnsForAI, // This should now be correctly formatted as MessageData[]
       model: model,
     });
     return {response: text!};
