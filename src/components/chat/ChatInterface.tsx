@@ -10,7 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useToast } from '@/hooks/use-toast';
-import { SendHorizonal, LoaderCircle, Paperclip, X, Trash2 } from 'lucide-react';
+import { SendHorizonal, LoaderCircle, Paperclip, X, Trash2, Download } from 'lucide-react';
 
 interface Message {
   id: string;
@@ -102,25 +102,34 @@ const ChatInterface = () => {
     setIsLoading(true);
 
     try {
-      const historyForAI: ChatTurn[] = messages
-        .filter(msg => msg.sender === 'user' || msg.sender === 'ai')
+      // 1. Prepare past history (MessageData[])
+      const pastHistoryTurns: ChatTurn[] = messages
+        .filter(msg => msg.sender === 'user' || msg.sender === 'ai') // Exclude system messages from history for AI
         .map(msg => ({
           role: msg.sender === 'user' ? 'user' : 'model',
-          text: msg.text.trim() === "" ? undefined : msg.text.trim(),
+          text: msg.text.trim() === "" ? undefined : msg.text.trim(), // Keep empty text if image exists
           photoDataUri: msg.imageUrl,
         }))
-        .filter(turn => turn.text || turn.photoDataUri);
+        .filter(turn => turn.text || turn.photoDataUri); // Ensure there's actual content
 
+      // 2. Prepare current prompt (Part[])
+      const currentPromptText = currentUserInput.trim();
 
       const input: RelayUserPromptInput = {
-        prompt: currentUserInput.trim(),
+        prompt: currentPromptText,
         model: selectedModel,
-        history: historyForAI,
+        history: pastHistoryTurns, // Send past history
       };
 
       if (currentImagePreview) {
-        input.photoDataUri = currentImagePreview;
+        input.photoDataUri = currentImagePreview; // Send current image
       }
+      
+      // Handle case where there's an image but no text prompt
+      if (!input.prompt && input.photoDataUri) {
+        // input.prompt = "Describe this image."; // Or some other default. This is handled in the flow now.
+      }
+
 
       const result = await relayUserPrompt(input);
       const aiMessage: Message = {
@@ -143,7 +152,7 @@ const ChatInterface = () => {
       });
     } finally {
       setIsLoading(false);
-      removeImage();
+      removeImage(); // Clear selected image after sending
     }
   };
 
@@ -157,8 +166,32 @@ const ChatInterface = () => {
     });
   };
 
+  const handleDownloadChat = () => {
+    if (messages.length === 0 || (messages.length === 1 && messages[0].sender === 'system')) {
+      toast({
+        title: 'Empty Chat',
+        description: 'There is no conversation to download.',
+        variant: 'destructive'
+      });
+      return;
+    }
+
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(messages, null, 2));
+    const downloadAnchorNode = document.createElement('a');
+    downloadAnchorNode.setAttribute("href", dataStr);
+    downloadAnchorNode.setAttribute("download", "chat-history.json");
+    document.body.appendChild(downloadAnchorNode); // required for firefox
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
+    toast({
+      title: 'Download Started',
+      description: 'Your chat history is being downloaded as chat-history.json.',
+    });
+  };
+
+
   return (
-    <div className="flex flex-col flex-1 bg-card min-h-0">
+    <div className="flex flex-col flex-1 bg-card min-h-0"> {/* Added min-h-0 */}
       <div className="p-4 border-b border-border flex items-center justify-center sm:justify-between gap-2">
         <Select value={selectedModel} onValueChange={setSelectedModel} disabled={isLoading}>
           <SelectTrigger className="w-full max-w-[280px] bg-background">
@@ -172,19 +205,33 @@ const ChatInterface = () => {
             ))}
           </SelectContent>
         </Select>
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={handleClearChat}
-          disabled={isLoading}
-          aria-label="Clear chat history"
-          className="shrink-0"
-        >
-          <Trash2 />
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={handleDownloadChat}
+            disabled={isLoading}
+            aria-label="Download chat history"
+            className="shrink-0"
+            title="Download Chat"
+          >
+            <Download />
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={handleClearChat}
+            disabled={isLoading}
+            aria-label="Clear chat history"
+            className="shrink-0"
+            title="Clear Chat"
+          >
+            <Trash2 />
+          </Button>
+        </div>
       </div>
 
-      <ScrollArea className="flex-1 min-h-0 p-4" viewportRef={scrollViewportRef}>
+      <ScrollArea className="flex-1 min-h-0 p-4" viewportRef={scrollViewportRef}> {/* Added min-h-0 */}
         <div className="space-y-4">
           {messages.map((msg) => (
             <ChatMessage key={msg.id} sender={msg.sender} text={msg.text} imageUrl={msg.imageUrl} />
@@ -227,6 +274,7 @@ const ChatInterface = () => {
             onClick={() => fileInputRef.current?.click()}
             disabled={isLoading}
             aria-label="Attach image"
+            title="Attach image"
           >
             <Paperclip />
           </Button>
@@ -245,7 +293,7 @@ const ChatInterface = () => {
             disabled={isLoading}
             aria-label="Chat message input"
           />
-          <Button type="submit" disabled={isLoading || (!inputValue.trim() && !selectedFile)} size="icon" aria-label="Send message">
+          <Button type="submit" disabled={isLoading || (!inputValue.trim() && !selectedFile)} size="icon" aria-label="Send message" title="Send message">
             {isLoading ? <LoaderCircle className="animate-spin" /> : <SendHorizonal />}
           </Button>
         </div>
