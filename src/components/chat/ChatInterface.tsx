@@ -10,7 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useToast } from '@/hooks/use-toast';
-import { SendHorizonal, LoaderCircle, Paperclip, X, Trash2, Download } from 'lucide-react';
+import { SendHorizonal, LoaderCircle, Paperclip, X, Trash2, Download, Upload } from 'lucide-react';
 
 interface Message {
   id: string;
@@ -29,6 +29,7 @@ const availableModels = [
 
 const initialSystemMessage = 'Welcome to ModelVerse! Select a model, type a message, or upload an image to start chatting.';
 const clearedSystemMessage = 'Chat cleared. Select a model and send a message to start a new conversation.';
+const loadedSystemMessage = 'Chat history loaded. Continue the conversation or start a new one.';
 
 const ChatInterface = () => {
   const [messages, setMessages] = useState<Message[]>([
@@ -43,6 +44,7 @@ const ChatInterface = () => {
   const { toast } = useToast();
   const scrollViewportRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (scrollViewportRef.current) {
@@ -125,12 +127,6 @@ const ChatInterface = () => {
         input.photoDataUri = currentImagePreview; // Send current image
       }
       
-      // Handle case where there's an image but no text prompt
-      if (!input.prompt && input.photoDataUri) {
-        // input.prompt = "Describe this image."; // Or some other default. This is handled in the flow now.
-      }
-
-
       const result = await relayUserPrompt(input);
       const aiMessage: Message = {
         id: crypto.randomUUID(),
@@ -167,7 +163,7 @@ const ChatInterface = () => {
   };
 
   const handleDownloadChat = () => {
-    if (messages.length === 0 || (messages.length === 1 && messages[0].sender === 'system')) {
+    if (messages.length === 0 || (messages.length === 1 && messages[0].sender === 'system' && messages[0].text === initialSystemMessage)) {
       toast({
         title: 'Empty Chat',
         description: 'There is no conversation to download.',
@@ -189,9 +185,73 @@ const ChatInterface = () => {
     });
   };
 
+  const handleFileUpload = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (file.type !== 'application/json') {
+      toast({
+        title: 'Invalid File Type',
+        description: 'Please upload a valid JSON file.',
+        variant: 'destructive',
+      });
+      if (uploadFileInputRef.current) uploadFileInputRef.current.value = "";
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = e.target?.result;
+        if (typeof text !== 'string') {
+          throw new Error('File content is not readable text.');
+        }
+        const loadedMessages = JSON.parse(text);
+
+        if (!Array.isArray(loadedMessages) || !loadedMessages.every(msg => 
+          typeof msg === 'object' && msg !== null &&
+          'id' in msg && typeof msg.id === 'string' &&
+          'sender' in msg && (msg.sender === 'user' || msg.sender === 'ai' || msg.sender === 'system') &&
+          'text' in msg && typeof msg.text === 'string' &&
+          (msg.imageUrl === undefined || typeof msg.imageUrl === 'string')
+        )) {
+          throw new Error('Invalid JSON structure for chat messages.');
+        }
+        
+        setMessages(loadedMessages.length > 0 ? loadedMessages : [{id: crypto.randomUUID(), sender: 'system', text: clearedSystemMessage }]);
+        if (loadedMessages.length > 0 && !(loadedMessages.length === 1 && loadedMessages[0].sender === 'system')) {
+             setMessages(prev => [...loadedMessages, {id: crypto.randomUUID(), sender: 'system', text: loadedSystemMessage}]);
+        }
+        toast({
+          title: 'Chat Loaded',
+          description: 'Chat history has been loaded from the file.',
+        });
+      } catch (error) {
+        console.error("Error loading chat from file:", error);
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error parsing file.';
+        toast({
+          title: 'Error Loading File',
+          description: `Could not load chat history: ${errorMessage}`,
+          variant: 'destructive',
+        });
+      } finally {
+        if (uploadFileInputRef.current) uploadFileInputRef.current.value = "";
+      }
+    };
+    reader.onerror = () => {
+      toast({
+        title: 'File Read Error',
+        description: 'Could not read the selected file.',
+        variant: 'destructive',
+      });
+      if (uploadFileInputRef.current) uploadFileInputRef.current.value = "";
+    };
+    reader.readAsText(file);
+  };
+
 
   return (
-    <div className="flex flex-col flex-1 bg-card min-h-0"> {/* Added min-h-0 */}
+    <div className="flex flex-col flex-1 bg-card min-h-0">
       <div className="p-4 border-b border-border flex items-center justify-center sm:justify-between gap-2">
         <Select value={selectedModel} onValueChange={setSelectedModel} disabled={isLoading}>
           <SelectTrigger className="w-full max-w-[280px] bg-background">
@@ -206,6 +266,25 @@ const ChatInterface = () => {
           </SelectContent>
         </Select>
         <div className="flex gap-2">
+          <input
+            type="file"
+            ref={uploadFileInputRef}
+            onChange={handleFileUpload}
+            accept=".json"
+            className="hidden"
+            aria-label="Upload chat history"
+          />
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => uploadFileInputRef.current?.click()}
+            disabled={isLoading}
+            aria-label="Upload chat history"
+            className="shrink-0"
+            title="Upload Chat"
+          >
+            <Upload />
+          </Button>
           <Button
             variant="outline"
             size="icon"
@@ -231,7 +310,7 @@ const ChatInterface = () => {
         </div>
       </div>
 
-      <ScrollArea className="flex-1 min-h-0 p-4" viewportRef={scrollViewportRef}> {/* Added min-h-0 */}
+      <ScrollArea className="flex-1 min-h-0 p-4" viewportRef={scrollViewportRef}>
         <div className="space-y-4">
           {messages.map((msg) => (
             <ChatMessage key={msg.id} sender={msg.sender} text={msg.text} imageUrl={msg.imageUrl} />
@@ -303,3 +382,5 @@ const ChatInterface = () => {
 };
 
 export default ChatInterface;
+
+    
