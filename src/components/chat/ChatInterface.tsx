@@ -21,9 +21,11 @@ interface Message {
 
 const availableModels = [
   { name: 'Gemini 1.5 Flash', id: 'googleai/gemini-1.5-flash-latest' },
-  // Update multimodal model when available, e.g. Gemini 1.5 Pro
-  // { name: 'Gemini 1.5 Pro (Multimodal)', id: 'googleai/gemini-1.5-pro-latest' },
   { name: 'OpenAI GPT-3.5 Turbo', id: 'openai/gpt-3.5-turbo' },
+  { name: 'OpenAI GPT-4o', id: 'openai/gpt-4o' },
+  { name: 'Grok 3', id: 'openai/grok-3' },
+  // The Anthropic model below will not work until configured in src/ai/genkit.ts
+  // similar to how Grok is configured, requiring ANTHROPIC_API_KEY.
   { name: 'Anthropic Claude 3 Haiku', id: 'anthropic/claude-3-haiku-20240307' },
 ];
 
@@ -55,13 +57,13 @@ const ChatInterface = () => {
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      if (file.size > 4 * 1024 * 1024) { // 4MB limit, common for some models
+      if (file.size > 4 * 1024 * 1024) { // 4MB limit
         toast({
           title: 'Image too large',
           description: 'Please select an image smaller than 4MB.',
           variant: 'destructive',
         });
-        if(fileInputRef.current) fileInputRef.current.value = ""; // Reset file input
+        if(fileInputRef.current) fileInputRef.current.value = "";
         return;
       }
       setSelectedFile(file);
@@ -80,7 +82,7 @@ const ChatInterface = () => {
     setSelectedFile(null);
     setImagePreview(null);
     if (fileInputRef.current) {
-      fileInputRef.current.value = ""; // Reset the file input
+      fileInputRef.current.value = "";
     }
   };
 
@@ -89,7 +91,7 @@ const ChatInterface = () => {
     if ((!inputValue.trim() && !selectedFile) || isLoading) return;
 
     const currentUserInput = inputValue;
-    const currentImagePreview = imagePreview; // This is the data URI for the new image
+    const currentImagePreview = imagePreview;
 
     const userMessage: Message = {
       id: crypto.randomUUID(),
@@ -100,31 +102,28 @@ const ChatInterface = () => {
     setMessages((prevMessages) => [...prevMessages, userMessage]);
 
     setInputValue('');
-    // Keep selectedFile and imagePreview for this send, clear after
     setIsLoading(true);
 
     try {
-      // 1. Prepare past history (MessageData[])
       const pastHistoryTurns: ChatTurn[] = messages
-        .filter(msg => msg.sender === 'user' || msg.sender === 'ai') // Exclude system messages from history for AI
+        .filter(msg => msg.sender === 'user' || msg.sender === 'ai')
         .map(msg => ({
           role: msg.sender === 'user' ? 'user' : 'model',
-          text: msg.text.trim() === "" ? undefined : msg.text.trim(), // Keep empty text if image exists
+          text: msg.text.trim() === "" && msg.imageUrl ? undefined : msg.text.trim(),
           photoDataUri: msg.imageUrl,
         }))
-        .filter(turn => turn.text || turn.photoDataUri); // Ensure there's actual content
+        .filter(turn => turn.text || turn.photoDataUri);
 
-      // 2. Prepare current prompt (Part[])
       const currentPromptText = currentUserInput.trim();
 
       const input: RelayUserPromptInput = {
         prompt: currentPromptText,
         model: selectedModel,
-        history: pastHistoryTurns, // Send past history
+        history: pastHistoryTurns,
       };
 
       if (currentImagePreview) {
-        input.photoDataUri = currentImagePreview; // Send current image
+        input.photoDataUri = currentImagePreview;
       }
       
       const result = await relayUserPrompt(input);
@@ -148,7 +147,7 @@ const ChatInterface = () => {
       });
     } finally {
       setIsLoading(false);
-      removeImage(); // Clear selected image after sending
+      removeImage();
     }
   };
 
@@ -163,7 +162,7 @@ const ChatInterface = () => {
   };
 
   const handleDownloadChat = () => {
-    if (messages.length === 0 || (messages.length === 1 && messages[0].sender === 'system' && messages[0].text === initialSystemMessage)) {
+    if (messages.length === 0 || (messages.length === 1 && messages[0].sender === 'system' && (messages[0].text === initialSystemMessage || messages[0].text === clearedSystemMessage ))){
       toast({
         title: 'Empty Chat',
         description: 'There is no conversation to download.',
@@ -175,13 +174,13 @@ const ChatInterface = () => {
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(messages, null, 2));
     const downloadAnchorNode = document.createElement('a');
     downloadAnchorNode.setAttribute("href", dataStr);
-    downloadAnchorNode.setAttribute("download", "chat-history.json");
-    document.body.appendChild(downloadAnchorNode); // required for firefox
+    downloadAnchorNode.setAttribute("download", "modelverse-chat-history.json");
+    document.body.appendChild(downloadAnchorNode);
     downloadAnchorNode.click();
     downloadAnchorNode.remove();
     toast({
       title: 'Download Started',
-      description: 'Your chat history is being downloaded as chat-history.json.',
+      description: 'Your chat history is being downloaded as modelverse-chat-history.json.',
     });
   };
 
@@ -206,21 +205,22 @@ const ChatInterface = () => {
         if (typeof text !== 'string') {
           throw new Error('File content is not readable text.');
         }
-        const loadedMessages = JSON.parse(text);
+        const loadedMessages: Message[] = JSON.parse(text);
 
         if (!Array.isArray(loadedMessages) || !loadedMessages.every(msg => 
           typeof msg === 'object' && msg !== null &&
           'id' in msg && typeof msg.id === 'string' &&
           'sender' in msg && (msg.sender === 'user' || msg.sender === 'ai' || msg.sender === 'system') &&
           'text' in msg && typeof msg.text === 'string' &&
-          (msg.imageUrl === undefined || typeof msg.imageUrl === 'string')
+          (msg.imageUrl === undefined || msg.imageUrl === null || typeof msg.imageUrl === 'string') // Allow null for imageUrl
         )) {
           throw new Error('Invalid JSON structure for chat messages.');
         }
         
-        setMessages(loadedMessages.length > 0 ? loadedMessages : [{id: crypto.randomUUID(), sender: 'system', text: clearedSystemMessage }]);
         if (loadedMessages.length > 0 && !(loadedMessages.length === 1 && loadedMessages[0].sender === 'system')) {
-             setMessages(prev => [...loadedMessages, {id: crypto.randomUUID(), sender: 'system', text: loadedSystemMessage}]);
+             setMessages([...loadedMessages, {id: crypto.randomUUID(), sender: 'system', text: loadedSystemMessage}]);
+        } else {
+            setMessages([{id: crypto.randomUUID(), sender: 'system', text: clearedSystemMessage }]);
         }
         toast({
           title: 'Chat Loaded',
@@ -251,7 +251,7 @@ const ChatInterface = () => {
 
 
   return (
-    <div className="flex flex-col flex-1 bg-card min-h-0">
+    <div className="flex flex-col flex-1 bg-card min-h-0"> {/* Added min-h-0 here */}
       <div className="p-4 border-b border-border flex items-center justify-center sm:justify-between gap-2">
         <Select value={selectedModel} onValueChange={setSelectedModel} disabled={isLoading}>
           <SelectTrigger className="w-full max-w-[280px] bg-background">
@@ -310,7 +310,7 @@ const ChatInterface = () => {
         </div>
       </div>
 
-      <ScrollArea className="flex-1 min-h-0 p-4" viewportRef={scrollViewportRef}>
+      <ScrollArea className="flex-1 min-h-0 p-4" viewportRef={scrollViewportRef}> {/* Added min-h-0 to ScrollArea */}
         <div className="space-y-4">
           {messages.map((msg) => (
             <ChatMessage key={msg.id} sender={msg.sender} text={msg.text} imageUrl={msg.imageUrl} />
@@ -382,5 +382,3 @@ const ChatInterface = () => {
 };
 
 export default ChatInterface;
-
-    
