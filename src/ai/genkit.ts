@@ -2,6 +2,8 @@
 import {genkit, type ModelInfo, GenerationCommonConfigSchema} from 'genkit';
 import {googleAI} from '@genkit-ai/googleai';
 import openAI from 'genkitx-openai';
+import { config } from 'dotenv';
+config(); // Ensure environment variables are loaded
 
 const plugins = [];
 
@@ -16,37 +18,45 @@ if (process.env.GEMINI_API_KEY) {
 }
 
 // Configure and add ONE instance for OpenAI-compatible models (OpenAI or Grok)
-// This addresses the "Plugin openai already registered" error.
-// It means you can use EITHER standard OpenAI models OR Grok via genkitx-openai,
-// but not both simultaneously if they require different API keys/base URLs.
-
 if (process.env.XAI_API_KEY) {
   // Configure for Grok if XAI_API_KEY is present
-  const grokModelInfo: ModelInfo = {
+  const grok3ModelInfo: ModelInfo = {
     label: 'Grok 3',
-    versions: ['grok-3'], // This should match the model identifier Grok's API expects
+    versions: ['grok-3'],
     supports: {
       multiturn: true,
-      tools: false, // Assuming no tool support via this API for now
-      media: false, // Assuming no media support
-      systemRole: true, // Common for chat models
+      tools: false,
+      media: false,
+      systemRole: true,
       output: ['text'],
     },
   };
-  const grokConfigSchema = GenerationCommonConfigSchema.extend({});
+  const grok3ConfigSchema = GenerationCommonConfigSchema.extend({});
+
+  const grok2VisionModelInfo: ModelInfo = {
+    label: 'Grok 2 Vision',
+    versions: ['grok-2-vision-latest'],
+    supports: {
+      multiturn: true,
+      tools: false,
+      media: true, // Vision model
+      systemRole: true,
+      output: ['text'],
+    },
+  };
+  const grok2VisionConfigSchema = GenerationCommonConfigSchema.extend({});
 
   plugins.push(
     openAI({
       apiKey: process.env.XAI_API_KEY as string,
       baseURL: 'https://api.x.ai/v1',
       models: [
-        // The 'name' here is how Genkit will refer to the model, e.g., 'openai/grok-3'
-        // The actual model identifier sent to the API is specified in `versions` or handled by the API.
-        { name: 'grok-3', info: grokModelInfo, configSchema: grokConfigSchema },
+        { name: 'grok-3', info: grok3ModelInfo, configSchema: grok3ConfigSchema },
+        { name: 'grok-2-vision-latest', info: grok2VisionModelInfo, configSchema: grok2VisionConfigSchema },
       ],
     })
   );
-  console.log('genkitx-openai plugin loaded and configured for Grok models.');
+  console.log('genkitx-openai plugin loaded and configured for Grok models (grok-3, grok-2-vision-latest).');
   if (process.env.OPENAI_API_KEY) {
     console.warn('OPENAI_API_KEY is also set, but genkitx-openai is currently configured for Grok. Standard OpenAI models will not be available through this instance.');
   }
@@ -64,3 +74,4 @@ if (process.env.XAI_API_KEY) {
 export const ai = genkit({
   plugins: plugins,
 });
+

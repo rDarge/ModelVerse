@@ -24,6 +24,7 @@ const availableModels = [
   { name: 'OpenAI GPT-3.5 Turbo', id: 'openai/gpt-3.5-turbo' },
   { name: 'OpenAI GPT-4o', id: 'openai/gpt-4o' },
   { name: 'Grok 3', id: 'openai/grok-3' },
+  { name: 'Grok 2 Vision', id: 'openai/grok-2-vision-latest' },
   // The Anthropic model below will not work until configured in src/ai/genkit.ts
   // similar to how Grok is configured, requiring ANTHROPIC_API_KEY.
   { name: 'Anthropic Claude 3 Haiku', id: 'anthropic/claude-3-haiku-20240307' },
@@ -382,3 +383,4 @@ const ChatInterface = () => {
 };
 
 export default ChatInterface;
+
