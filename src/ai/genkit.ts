@@ -2,7 +2,15 @@ import {genkit} from 'genkit';
 import {googleAI} from '@genkit-ai/googleai';
 import openAI from 'genkitx-openai';
 
-const plugins = [googleAI()];
+const plugins = [];
+
+if (process.env.GEMINI_API_KEY) {
+  plugins.push(googleAI());
+} else {
+  console.warn(
+    'GEMINI_API_KEY not found in environment variables. Gemini models will be unavailable.'
+  );
+}
 
 if (process.env.OPENAI_API_KEY) {
   plugins.push(openAI({apiKey: process.env.OPENAI_API_KEY as string}));
