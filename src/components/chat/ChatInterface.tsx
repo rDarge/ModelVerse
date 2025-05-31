@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
-import { SendHorizonal, LoaderCircle, Paperclip, X, Trash2, Download, Upload, SlidersHorizontal } from 'lucide-react';
+import { SendHorizonal, LoaderCircle, Paperclip, X, Trash2, Download, Upload, SlidersHorizontal, Pencil } from 'lucide-react';
 
 interface Message {
   id: string;
@@ -28,8 +28,6 @@ const availableModels = [
   { name: 'OpenAI GPT-4o', id: 'openai/gpt-4o' },
   { name: 'Grok 3', id: 'openai/grok-3' },
   { name: 'Grok 2 Vision', id: 'openai/grok-2-vision-latest' },
-  // The Anthropic model below will not work until configured in src/ai/genkit.ts
-  // similar to how Grok is configured, requiring ANTHROPIC_API_KEY.
   { name: 'Anthropic Claude 3 Haiku', id: 'anthropic/claude-3-haiku-20240307' },
 ];
 
@@ -37,7 +35,6 @@ const initialSystemMessage = 'Welcome to ModelVerse! Select a model, type a mess
 const clearedSystemMessage = 'Chat cleared. Select a model and send a message to start a new conversation.';
 const loadedSystemMessage = 'Chat history loaded. Continue the conversation or start a new one.';
 
-// Mirrored from FlowModelConfig for frontend state
 interface ModelConfigState {
   maxOutputTokens?: number;
   temperature?: number;
@@ -54,13 +51,9 @@ const ChatInterface = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
 
-  const [modelConfig, setModelConfig] = useState<ModelConfigState>({
-    maxOutputTokens: undefined, // Default: 1024, placeholder will suggest model default
-    temperature: undefined,   // Default: 0.7
-    topP: undefined,
-    topK: undefined,
-  });
+  const [modelConfig, setModelConfig] = useState<ModelConfigState>({});
   const [tempModelConfig, setTempModelConfig] = useState<ModelConfigState>(modelConfig);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
 
@@ -68,6 +61,8 @@ const ChatInterface = () => {
   const scrollViewportRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadFileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
 
   useEffect(() => {
     if (scrollViewportRef.current) {
@@ -107,26 +102,65 @@ const ChatInterface = () => {
     }
   };
 
+  const handleInitiateEdit = (messageId: string) => {
+    const messageToEdit = messages.find(msg => msg.id === messageId);
+    if (messageToEdit && messageToEdit.sender === 'user') {
+      setEditingMessageId(messageId);
+      setInputValue(messageToEdit.text);
+      setImagePreview(messageToEdit.imageUrl || null);
+      setSelectedFile(null); // Clear any newly selected file when starting an edit
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      textareaRef.current?.focus();
+       toast({
+        title: 'Editing Message',
+        description: 'Message loaded for editing. Submit to save changes.',
+      });
+    }
+  };
+  
+  const cancelEdit = () => {
+    setEditingMessageId(null);
+    setInputValue('');
+    removeImage();
+    toast({
+      title: 'Edit Cancelled',
+      description: 'Message editing has been cancelled.',
+    });
+  };
+
+
   const handleSendMessage = async (e?: FormEvent<HTMLFormElement>) => {
     if (e) e.preventDefault();
-    if ((!inputValue.trim() && !selectedFile) || isLoading) return;
+    if ((!inputValue.trim() && !selectedFile && !imagePreview && !editingMessageId) || isLoading) return;
 
-    const currentUserInput = inputValue;
-    const currentImagePreview = imagePreview;
+    const currentUserInputText = inputValue.trim();
+    const currentUserImagePreview = imagePreview; // This could be from an old message or a new upload
 
-    const userMessage: Message = {
-      id: crypto.randomUUID(),
-      sender: 'user',
-      text: currentUserInput.trim(),
-      imageUrl: currentImagePreview || undefined,
-    };
-    setMessages((prevMessages) => [...prevMessages, userMessage]);
-
-    setInputValue('');
     setIsLoading(true);
 
-    try {
-      const pastHistoryTurns: ChatTurn[] = messages
+    let historyForAI: ChatTurn[] = [];
+    let promptTextForAI = currentUserInputText;
+    let promptImageForAI = currentUserImagePreview;
+
+    if (editingMessageId) {
+      const editIndex = messages.findIndex(msg => msg.id === editingMessageId);
+      if (editIndex === -1) {
+        toast({ title: 'Error', description: 'Could not find message to edit.', variant: 'destructive' });
+        setIsLoading(false);
+        setEditingMessageId(null); // Reset editing state
+        return;
+      }
+
+      const updatedUserMessage: Message = {
+        ...messages[editIndex],
+        text: currentUserInputText,
+        imageUrl: currentUserImagePreview || undefined,
+      };
+
+      const messagesUpToEdit = messages.slice(0, editIndex);
+      setMessages([...messagesUpToEdit, updatedUserMessage]); // Update UI immediately
+
+      historyForAI = messagesUpToEdit
         .filter(msg => msg.sender === 'user' || msg.sender === 'ai')
         .map(msg => ({
           role: msg.sender === 'user' ? 'user' : 'model',
@@ -134,10 +168,34 @@ const ChatInterface = () => {
           photoDataUri: msg.imageUrl,
         }))
         .filter(turn => turn.text || turn.photoDataUri);
+      
+      // Prompt for AI is the content of the edited message
+      promptTextForAI = currentUserInputText;
+      promptImageForAI = currentUserImagePreview;
 
-      const currentPromptText = currentUserInput.trim();
+    } else {
+      // Sending a new message
+      const userMessage: Message = {
+        id: crypto.randomUUID(),
+        sender: 'user',
+        text: currentUserInputText,
+        imageUrl: currentUserImagePreview || undefined,
+      };
+      setMessages(prevMessages => [...prevMessages, userMessage]);
 
-      // Prepare modelConfig for the flow, filtering out empty strings from inputs
+      historyForAI = messages // Use current messages array before adding the new one
+        .filter(msg => msg.sender === 'user' || msg.sender === 'ai')
+        .map(msg => ({
+          role: msg.sender === 'user' ? 'user' : 'model',
+          text: msg.text.trim() === "" && msg.imageUrl ? undefined : msg.text.trim(),
+          photoDataUri: msg.imageUrl,
+        }))
+        .filter(turn => turn.text || turn.photoDataUri);
+    }
+    
+    setInputValue(''); // Clear input after grabbing its value
+
+    try {
       const flowConfig: FlowModelConfig = {};
       if (modelConfig.maxOutputTokens !== undefined) flowConfig.maxOutputTokens = modelConfig.maxOutputTokens;
       if (modelConfig.temperature !== undefined) flowConfig.temperature = modelConfig.temperature;
@@ -145,14 +203,14 @@ const ChatInterface = () => {
       if (modelConfig.topK !== undefined) flowConfig.topK = modelConfig.topK;
 
       const input: RelayUserPromptInput = {
-        prompt: currentPromptText,
+        prompt: promptTextForAI,
         model: selectedModel,
-        history: pastHistoryTurns,
+        history: historyForAI,
         modelConfig: Object.keys(flowConfig).length > 0 ? flowConfig : undefined,
       };
 
-      if (currentImagePreview) {
-        input.photoDataUri = currentImagePreview;
+      if (promptImageForAI) {
+        input.photoDataUri = promptImageForAI;
       }
       
       const result = await relayUserPrompt(input);
@@ -161,14 +219,41 @@ const ChatInterface = () => {
         sender: 'ai',
         text: result.response,
       };
-      setMessages((prevMessages) => [...prevMessages, aiMessage]);
+
+      if (editingMessageId) {
+         // Append AI response after the edited message
+        setMessages(prevMessages => {
+            const editIndex = prevMessages.findIndex(msg => msg.id === editingMessageId);
+            if (editIndex !== -1) {
+                // Ensure we are building on the state that includes the updated user message
+                const baseMessages = prevMessages.slice(0, editIndex + 1); 
+                return [...baseMessages, aiMessage];
+            }
+            return [...prevMessages, aiMessage]; // Fallback, should not happen
+        });
+        toast({ title: 'Message Updated', description: 'AI response regenerated.' });
+      } else {
+        setMessages(prevMessages => [...prevMessages, aiMessage]);
+      }
+
     } catch (error) {
       console.error('Error relaying prompt:', error);
       const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
-      setMessages((prevMessages) => [
-        ...prevMessages,
-        { id: crypto.randomUUID(), sender: 'system', text: `Error: ${errorMessage}` }
-      ]);
+      const systemErrorMessage: Message = { id: crypto.randomUUID(), sender: 'system', text: `Error: ${errorMessage}` };
+      
+      if (editingMessageId) {
+        setMessages(prevMessages => {
+            const editIndex = prevMessages.findIndex(msg => msg.id === editingMessageId);
+            if (editIndex !== -1) {
+                const baseMessages = prevMessages.slice(0, editIndex + 1);
+                return [...baseMessages, systemErrorMessage];
+            }
+            return [...prevMessages, systemErrorMessage];
+        });
+      } else {
+        setMessages(prevMessages => [...prevMessages, systemErrorMessage]);
+      }
+
       toast({
         title: 'Error',
         description: `Failed to get response from AI: ${errorMessage}`,
@@ -176,7 +261,10 @@ const ChatInterface = () => {
       });
     } finally {
       setIsLoading(false);
-      removeImage();
+      if (editingMessageId) {
+        setEditingMessageId(null); // Clear editing state AFTER AI response or error
+      }
+      removeImage(); // Clear preview and file for next message / after edit
     }
   };
 
@@ -184,6 +272,7 @@ const ChatInterface = () => {
     setMessages([{ id: crypto.randomUUID(), sender: 'system', text: clearedSystemMessage }]);
     setInputValue('');
     removeImage();
+    setEditingMessageId(null);
     toast({
       title: 'Chat Cleared',
       description: 'The conversation history has been cleared.',
@@ -251,6 +340,7 @@ const ChatInterface = () => {
         } else {
             setMessages([{id: crypto.randomUUID(), sender: 'system', text: clearedSystemMessage }]);
         }
+        setEditingMessageId(null); // Ensure not in edit mode after loading
         toast({
           title: 'Chat Loaded',
           description: 'Chat history has been loaded from the file.',
@@ -296,14 +386,14 @@ const ChatInterface = () => {
   };
 
   const openSettingsModal = () => {
-    setTempModelConfig(modelConfig); // Initialize modal with current saved settings
+    setTempModelConfig(modelConfig); 
     setIsSettingsModalOpen(true);
   };
 
   return (
     <div className="flex flex-col flex-1 bg-card min-h-0">
       <div className="p-4 border-b border-border flex items-center justify-center sm:justify-between gap-2 flex-wrap">
-        <Select value={selectedModel} onValueChange={setSelectedModel} disabled={isLoading}>
+        <Select value={selectedModel} onValueChange={setSelectedModel} disabled={isLoading || !!editingMessageId}>
           <SelectTrigger className="w-full sm:w-auto sm:min-w-[200px] sm:max-w-[280px] bg-background">
             <SelectValue placeholder="Select a model" />
           </SelectTrigger>
@@ -320,7 +410,7 @@ const ChatInterface = () => {
             variant="outline"
             size="icon"
             onClick={openSettingsModal}
-            disabled={isLoading}
+            disabled={isLoading || !!editingMessageId}
             aria-label="Model settings"
             className="shrink-0"
             title="Model Settings"
@@ -339,7 +429,7 @@ const ChatInterface = () => {
             variant="outline"
             size="icon"
             onClick={() => uploadFileInputRef.current?.click()}
-            disabled={isLoading}
+            disabled={isLoading || !!editingMessageId}
             aria-label="Upload chat history"
             className="shrink-0"
             title="Upload Chat"
@@ -350,7 +440,7 @@ const ChatInterface = () => {
             variant="outline"
             size="icon"
             onClick={handleDownloadChat}
-            disabled={isLoading}
+            disabled={isLoading || !!editingMessageId}
             aria-label="Download chat history"
             className="shrink-0"
             title="Download Chat"
@@ -361,7 +451,7 @@ const ChatInterface = () => {
             variant="outline"
             size="icon"
             onClick={handleClearChat}
-            disabled={isLoading}
+            disabled={isLoading || !!editingMessageId}
             aria-label="Clear chat history"
             className="shrink-0"
             title="Clear Chat"
@@ -457,7 +547,14 @@ const ChatInterface = () => {
       <ScrollArea className="flex-1 min-h-0 px-4 pt-4 pb-6" viewportRef={scrollViewportRef}>
         <div className="space-y-4">
           {messages.map((msg) => (
-            <ChatMessage key={msg.id} sender={msg.sender} text={msg.text} imageUrl={msg.imageUrl} />
+            <ChatMessage
+              key={msg.id}
+              messageId={msg.id}
+              sender={msg.sender}
+              text={msg.text}
+              imageUrl={msg.imageUrl}
+              onEditMessage={msg.sender === 'user' ? handleInitiateEdit : undefined}
+            />
           ))}
         </div>
       </ScrollArea>
@@ -490,6 +587,19 @@ const ChatInterface = () => {
             className="hidden"
             aria-label="Upload image"
           />
+           {editingMessageId && (
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={cancelEdit}
+              disabled={isLoading}
+              aria-label="Cancel edit"
+              title="Cancel Edit"
+            >
+              <X />
+            </Button>
+          )}
           <Button
             type="button"
             variant="outline"
@@ -502,9 +612,14 @@ const ChatInterface = () => {
             <Paperclip />
           </Button>
           <Textarea
+            ref={textareaRef}
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
-            placeholder={imagePreview ? "Add a caption... (optional)" : "Type your message..."}
+            placeholder={
+              editingMessageId 
+                ? "Editing message... (Submit to save, or cancel)" 
+                : (imagePreview ? "Add a caption... (optional)" : "Type your message...")
+            }
             className="flex-grow resize-none bg-input text-foreground placeholder:text-muted-foreground"
             rows={1}
             onKeyDown={(e) => {
@@ -516,8 +631,14 @@ const ChatInterface = () => {
             disabled={isLoading}
             aria-label="Chat message input"
           />
-          <Button type="submit" disabled={isLoading || (!inputValue.trim() && !selectedFile)} size="icon" aria-label="Send message" title="Send message">
-            {isLoading ? <LoaderCircle className="animate-spin" /> : <SendHorizonal />}
+          <Button 
+            type="submit" 
+            disabled={isLoading || (!inputValue.trim() && !selectedFile && !imagePreview && !editingMessageId)} 
+            size="icon" 
+            aria-label={editingMessageId ? "Update message" : "Send message"}
+            title={editingMessageId ? "Update Message" : "Send Message"}
+          >
+            {isLoading ? <LoaderCircle className="animate-spin" /> : (editingMessageId ? <Pencil /> : <SendHorizonal />)}
           </Button>
         </div>
       </form>
