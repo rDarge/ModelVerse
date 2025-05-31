@@ -454,7 +454,7 @@ const ChatInterface = () => {
       </Dialog>
 
 
-      <ScrollArea className="flex-1 min-h-0 p-4" viewportRef={scrollViewportRef}>
+      <ScrollArea className="flex-1 min-h-0 px-4 pt-4 pb-6" viewportRef={scrollViewportRef}>
         <div className="space-y-4">
           {messages.map((msg) => (
             <ChatMessage key={msg.id} sender={msg.sender} text={msg.text} imageUrl={msg.imageUrl} />
