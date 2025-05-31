@@ -4,11 +4,12 @@
 
 /**
  * @fileOverview Relays a user prompt (text and/or image) along with conversation history to a selected LLM and returns the response.
- * It filters out image data for models that do not support image inputs.
+ * It filters out image data for models that do not support image inputs and allows model configuration.
  *
  * - relayUserPrompt - A function that relays the user's prompt and history to the selected LLM.
  * - RelayUserPromptInput - The input type for the relayUserPrompt function.
  * - RelayUserPromptOutput - The return type for the relayUserPrompt function.
+ * - ModelConfig - The type for model configuration parameters.
  */
 
 import {ai} from '@/ai/genkit';
@@ -24,6 +25,14 @@ const ChatTurnSchema = z.object({
 });
 export type ChatTurn = z.infer<typeof ChatTurnSchema>;
 
+const ModelConfigSchema = z.object({
+  maxOutputTokens: z.number().int().positive().optional().describe('Maximum number of tokens to generate.'),
+  temperature: z.number().min(0).max(2).optional().describe('Controls randomness. Lower is more deterministic.'),
+  topP: z.number().min(0).max(1).optional().describe('Nucleus sampling parameter.'),
+  topK: z.number().int().positive().optional().describe('Top-k sampling parameter.'),
+}).deepPartial(); // Use deepPartial to ensure all nested fields are optional if any.
+export type ModelConfig = z.infer<typeof ModelConfigSchema>;
+
 const RelayUserPromptInputSchema = z.object({
   prompt: z.string().optional().describe('The current user text prompt to relay to the LLM.'),
   model: z.string().describe('The selected LLM model to use.'),
@@ -31,6 +40,7 @@ const RelayUserPromptInputSchema = z.object({
     "An optional photo for the current prompt, as a data URI that must include a MIME type and use Base64 encoding. Expected format: 'data:<mimetype>;base64,<encoded_data>'."
   ),
   history: z.array(ChatTurnSchema).optional().describe("The conversation history before the current prompt."),
+  modelConfig: ModelConfigSchema.optional().describe('Optional model configuration parameters.'),
 });
 export type RelayUserPromptInput = z.infer<typeof RelayUserPromptInputSchema>;
 
@@ -47,7 +57,7 @@ export async function relayUserPrompt(input: RelayUserPromptInput): Promise<Rela
 const TEXT_ONLY_MODELS = [
   'openai/gpt-3.5-turbo',
   'openai/grok-3',
-  'anthropic/claude-3-haiku-20240307' // Assuming this variant is text-only
+  'anthropic/claude-3-haiku-20240307'
 ];
 
 const relayUserPromptFlow = ai.defineFlow(
@@ -57,7 +67,7 @@ const relayUserPromptFlow = ai.defineFlow(
     outputSchema: RelayUserPromptOutputSchema,
   },
   async (input) => {
-    const { prompt: currentPromptText, photoDataUri: currentPhotoDataUriFromUser, model, history: pastHistoryTurns } = input;
+    const { prompt: currentPromptText, photoDataUri: currentPhotoDataUriFromUser, model, history: pastHistoryTurns, modelConfig } = input;
 
     const isTextOnlyModel = TEXT_ONLY_MODELS.includes(model);
 
@@ -65,16 +75,12 @@ const relayUserPromptFlow = ai.defineFlow(
     const trimmedCurrentPromptText = currentPromptText?.trim();
 
     if (isTextOnlyModel && finalPhotoDataUriForCurrentPrompt) {
-      // If the model is text-only and an image was provided for the current prompt
       if (!trimmedCurrentPromptText) {
-        // User provided only an image to a text-only model
         return { response: "The selected model does not support images. Please provide a text prompt or select a different model." };
       }
-      // If text was also provided, strip the image and proceed with text only for the current prompt
       finalPhotoDataUriForCurrentPrompt = undefined;
     }
 
-    // 1. Prepare past history for the 'messages' field (MessageData[])
     const pastMessagesForAI: MessageData[] = [];
     if (pastHistoryTurns) {
       for (const turn of pastHistoryTurns) {
@@ -82,42 +88,49 @@ const relayUserPromptFlow = ai.defineFlow(
         if (turn.text && turn.text.trim() !== "") {
           historicalTurnContentParts.push({ text: turn.text.trim() });
         }
-        // Only include photo from history if the model is NOT text-only and photo exists
         if (turn.photoDataUri && !isTextOnlyModel) {
           historicalTurnContentParts.push({ media: { url: turn.photoDataUri } });
         }
-        // Only add a turn to history if it has actual content
         if (historicalTurnContentParts.length > 0) {
           pastMessagesForAI.push({ role: turn.role, content: historicalTurnContentParts });
         }
       }
     }
 
-    // 2. Prepare current prompt for the 'prompt' field (Part[])
     const currentPromptPartsForAI: Part[] = [];
-    // Use a default prompt "Describe this image." only if there's an image (and it's allowed) and no text.
     const effectiveCurrentPromptText = trimmedCurrentPromptText || (finalPhotoDataUriForCurrentPrompt && !trimmedCurrentPromptText ? "Describe this image." : "");
 
     if (effectiveCurrentPromptText) {
       currentPromptPartsForAI.push({ text: effectiveCurrentPromptText });
     }
-    if (finalPhotoDataUriForCurrentPrompt) { // This is the potentially stripped photo URI
+    if (finalPhotoDataUriForCurrentPrompt) {
       currentPromptPartsForAI.push({ media: { url: finalPhotoDataUriForCurrentPrompt } });
     }
 
-    // If there's no current prompt content (neither text nor image after filtering) AND no history, then it's an empty request.
     if (currentPromptPartsForAI.length === 0 && pastMessagesForAI.length === 0) {
         return { response: "Please provide a prompt." };
     }
     
-    // Construct GenerateOptions
     const generateOptions: GenerateOptions<any, any> = {
       model: model,
-      prompt: currentPromptPartsForAI, // Current input as Part[]
+      prompt: currentPromptPartsForAI,
     };
 
     if (pastMessagesForAI.length > 0) {
-      generateOptions.messages = pastMessagesForAI; // Past history as MessageData[]
+      generateOptions.messages = pastMessagesForAI;
+    }
+
+    if (modelConfig) {
+      // Filter out undefined values from modelConfig before assigning
+      const cleanConfig: Record<string, any> = {};
+      for (const key in modelConfig) {
+        if (modelConfig[key as keyof ModelConfig] !== undefined) {
+          cleanConfig[key] = modelConfig[key as keyof ModelConfig];
+        }
+      }
+      if (Object.keys(cleanConfig).length > 0) {
+        generateOptions.config = cleanConfig;
+      }
     }
     
     const {text} = await ai.generate(generateOptions);

@@ -3,14 +3,17 @@
 
 import { useState, useRef, useEffect, type FormEvent, type ChangeEvent } from 'react';
 import Image from 'next/image';
-import { relayUserPrompt, type RelayUserPromptInput, type ChatTurn } from '@/ai/flows/relay-user-prompt';
+import { relayUserPrompt, type RelayUserPromptInput, type ChatTurn, type ModelConfig as FlowModelConfig } from '@/ai/flows/relay-user-prompt';
 import ChatMessage from './ChatMessage';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogClose } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
-import { SendHorizonal, LoaderCircle, Paperclip, X, Trash2, Download, Upload } from 'lucide-react';
+import { SendHorizonal, LoaderCircle, Paperclip, X, Trash2, Download, Upload, SlidersHorizontal } from 'lucide-react';
 
 interface Message {
   id: string;
@@ -34,6 +37,14 @@ const initialSystemMessage = 'Welcome to ModelVerse! Select a model, type a mess
 const clearedSystemMessage = 'Chat cleared. Select a model and send a message to start a new conversation.';
 const loadedSystemMessage = 'Chat history loaded. Continue the conversation or start a new one.';
 
+// Mirrored from FlowModelConfig for frontend state
+interface ModelConfigState {
+  maxOutputTokens?: number;
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+}
+
 const ChatInterface = () => {
   const [messages, setMessages] = useState<Message[]>([
     { id: crypto.randomUUID(), sender: 'system', text: initialSystemMessage }
@@ -43,6 +54,15 @@ const ChatInterface = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+
+  const [modelConfig, setModelConfig] = useState<ModelConfigState>({
+    maxOutputTokens: undefined, // Default: 1024, placeholder will suggest model default
+    temperature: undefined,   // Default: 0.7
+    topP: undefined,
+    topK: undefined,
+  });
+  const [tempModelConfig, setTempModelConfig] = useState<ModelConfigState>(modelConfig);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
 
   const { toast } = useToast();
   const scrollViewportRef = useRef<HTMLDivElement>(null);
@@ -117,10 +137,18 @@ const ChatInterface = () => {
 
       const currentPromptText = currentUserInput.trim();
 
+      // Prepare modelConfig for the flow, filtering out empty strings from inputs
+      const flowConfig: FlowModelConfig = {};
+      if (modelConfig.maxOutputTokens !== undefined) flowConfig.maxOutputTokens = modelConfig.maxOutputTokens;
+      if (modelConfig.temperature !== undefined) flowConfig.temperature = modelConfig.temperature;
+      if (modelConfig.topP !== undefined) flowConfig.topP = modelConfig.topP;
+      if (modelConfig.topK !== undefined) flowConfig.topK = modelConfig.topK;
+
       const input: RelayUserPromptInput = {
         prompt: currentPromptText,
         model: selectedModel,
         history: pastHistoryTurns,
+        modelConfig: Object.keys(flowConfig).length > 0 ? flowConfig : undefined,
       };
 
       if (currentImagePreview) {
@@ -213,7 +241,7 @@ const ChatInterface = () => {
           'id' in msg && typeof msg.id === 'string' &&
           'sender' in msg && (msg.sender === 'user' || msg.sender === 'ai' || msg.sender === 'system') &&
           'text' in msg && typeof msg.text === 'string' &&
-          (msg.imageUrl === undefined || msg.imageUrl === null || typeof msg.imageUrl === 'string') // Allow null for imageUrl
+          (msg.imageUrl === undefined || msg.imageUrl === null || typeof msg.imageUrl === 'string')
         )) {
           throw new Error('Invalid JSON structure for chat messages.');
         }
@@ -250,12 +278,33 @@ const ChatInterface = () => {
     reader.readAsText(file);
   };
 
+  const handleConfigChange = (key: keyof ModelConfigState, value: string) => {
+    const numValue = parseFloat(value);
+    setTempModelConfig(prev => ({
+      ...prev,
+      [key]: isNaN(numValue) ? undefined : numValue,
+    }));
+  };
+
+  const handleSaveConfig = () => {
+    setModelConfig(tempModelConfig);
+    setIsSettingsModalOpen(false);
+    toast({
+      title: 'Settings Saved',
+      description: 'Model configuration has been updated.',
+    });
+  };
+
+  const openSettingsModal = () => {
+    setTempModelConfig(modelConfig); // Initialize modal with current saved settings
+    setIsSettingsModalOpen(true);
+  };
 
   return (
-    <div className="flex flex-col flex-1 bg-card min-h-0"> {/* Added min-h-0 here */}
-      <div className="p-4 border-b border-border flex items-center justify-center sm:justify-between gap-2">
+    <div className="flex flex-col flex-1 bg-card min-h-0">
+      <div className="p-4 border-b border-border flex items-center justify-center sm:justify-between gap-2 flex-wrap">
         <Select value={selectedModel} onValueChange={setSelectedModel} disabled={isLoading}>
-          <SelectTrigger className="w-full max-w-[280px] bg-background">
+          <SelectTrigger className="w-full sm:w-auto sm:min-w-[200px] sm:max-w-[280px] bg-background">
             <SelectValue placeholder="Select a model" />
           </SelectTrigger>
           <SelectContent>
@@ -267,6 +316,17 @@ const ChatInterface = () => {
           </SelectContent>
         </Select>
         <div className="flex gap-2">
+           <Button
+            variant="outline"
+            size="icon"
+            onClick={openSettingsModal}
+            disabled={isLoading}
+            aria-label="Model settings"
+            className="shrink-0"
+            title="Model Settings"
+          >
+            <SlidersHorizontal />
+          </Button>
           <input
             type="file"
             ref={uploadFileInputRef}
@@ -311,7 +371,90 @@ const ChatInterface = () => {
         </div>
       </div>
 
-      <ScrollArea className="flex-1 min-h-0 p-4" viewportRef={scrollViewportRef}> {/* Added min-h-0 to ScrollArea */}
+      <Dialog open={isSettingsModalOpen} onOpenChange={setIsSettingsModalOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Model Configuration</DialogTitle>
+            <DialogDescription>
+              Adjust parameters for the selected model. Leave blank to use model defaults.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="maxOutputTokens" className="text-right col-span-1">
+                Max Tokens
+              </Label>
+              <Input
+                id="maxOutputTokens"
+                type="number"
+                placeholder="Model default"
+                value={tempModelConfig.maxOutputTokens ?? ''}
+                onChange={(e) => handleConfigChange('maxOutputTokens', e.target.value)}
+                className="col-span-3"
+                step="1"
+              />
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="temperature" className="text-right col-span-1">
+                Temperature
+              </Label>
+              <Input
+                id="temperature"
+                type="number"
+                placeholder="Model default (e.g., 0.7)"
+                value={tempModelConfig.temperature ?? ''}
+                onChange={(e) => handleConfigChange('temperature', e.target.value)}
+                className="col-span-3"
+                step="0.1"
+                min="0"
+                max="2"
+              />
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="topP" className="text-right col-span-1">
+                Top P
+              </Label>
+              <Input
+                id="topP"
+                type="number"
+                placeholder="Model default (e.g., 0.9)"
+                value={tempModelConfig.topP ?? ''}
+                onChange={(e) => handleConfigChange('topP', e.target.value)}
+                className="col-span-3"
+                step="0.05"
+                min="0"
+                max="1"
+              />
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="topK" className="text-right col-span-1">
+                Top K
+              </Label>
+              <Input
+                id="topK"
+                type="number"
+                placeholder="Model default"
+                value={tempModelConfig.topK ?? ''}
+                onChange={(e) => handleConfigChange('topK', e.target.value)}
+                className="col-span-3"
+                step="1"
+                min="0"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline" onClick={() => setTempModelConfig(modelConfig)}>
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button type="button" onClick={handleSaveConfig}>Save Changes</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+
+      <ScrollArea className="flex-1 min-h-0 p-4" viewportRef={scrollViewportRef}>
         <div className="space-y-4">
           {messages.map((msg) => (
             <ChatMessage key={msg.id} sender={msg.sender} text={msg.text} imageUrl={msg.imageUrl} />
@@ -383,4 +526,3 @@ const ChatInterface = () => {
 };
 
 export default ChatInterface;
-
