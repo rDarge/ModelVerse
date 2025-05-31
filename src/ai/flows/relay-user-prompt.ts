@@ -4,6 +4,7 @@
 
 /**
  * @fileOverview Relays a user prompt (text and/or image) along with conversation history to a selected LLM and returns the response.
+ * It filters out image data for models that do not support image inputs.
  *
  * - relayUserPrompt - A function that relays the user's prompt and history to the selected LLM.
  * - RelayUserPromptInput - The input type for the relayUserPrompt function.
@@ -42,6 +43,13 @@ export async function relayUserPrompt(input: RelayUserPromptInput): Promise<Rela
   return relayUserPromptFlow(input);
 }
 
+// Define models that do not support image inputs
+const TEXT_ONLY_MODELS = [
+  'openai/gpt-3.5-turbo',
+  'openai/grok-3',
+  'anthropic/claude-3-haiku-20240307' // Assuming this variant is text-only
+];
+
 const relayUserPromptFlow = ai.defineFlow(
   {
     name: 'relayUserPromptFlow',
@@ -49,7 +57,22 @@ const relayUserPromptFlow = ai.defineFlow(
     outputSchema: RelayUserPromptOutputSchema,
   },
   async (input) => {
-    const { prompt: currentPromptText, photoDataUri: currentPhotoDataUri, model, history: pastHistoryTurns } = input;
+    const { prompt: currentPromptText, photoDataUri: currentPhotoDataUriFromUser, model, history: pastHistoryTurns } = input;
+
+    const isTextOnlyModel = TEXT_ONLY_MODELS.includes(model);
+
+    let finalPhotoDataUriForCurrentPrompt = currentPhotoDataUriFromUser;
+    const trimmedCurrentPromptText = currentPromptText?.trim();
+
+    if (isTextOnlyModel && finalPhotoDataUriForCurrentPrompt) {
+      // If the model is text-only and an image was provided for the current prompt
+      if (!trimmedCurrentPromptText) {
+        // User provided only an image to a text-only model
+        return { response: "The selected model does not support images. Please provide a text prompt or select a different model." };
+      }
+      // If text was also provided, strip the image and proceed with text only for the current prompt
+      finalPhotoDataUriForCurrentPrompt = undefined;
+    }
 
     // 1. Prepare past history for the 'messages' field (MessageData[])
     const pastMessagesForAI: MessageData[] = [];
@@ -59,7 +82,8 @@ const relayUserPromptFlow = ai.defineFlow(
         if (turn.text && turn.text.trim() !== "") {
           historicalTurnContentParts.push({ text: turn.text.trim() });
         }
-        if (turn.photoDataUri) {
+        // Only include photo from history if the model is NOT text-only and photo exists
+        if (turn.photoDataUri && !isTextOnlyModel) {
           historicalTurnContentParts.push({ media: { url: turn.photoDataUri } });
         }
         // Only add a turn to history if it has actual content
@@ -71,25 +95,22 @@ const relayUserPromptFlow = ai.defineFlow(
 
     // 2. Prepare current prompt for the 'prompt' field (Part[])
     const currentPromptPartsForAI: Part[] = [];
-    const trimmedCurrentPromptText = currentPromptText?.trim();
-    // Use a default prompt only if there's an image and no text.
-    const effectiveCurrentPromptText = trimmedCurrentPromptText || (currentPhotoDataUri && !trimmedCurrentPromptText ? "Describe this image." : "");
+    // Use a default prompt "Describe this image." only if there's an image (and it's allowed) and no text.
+    const effectiveCurrentPromptText = trimmedCurrentPromptText || (finalPhotoDataUriForCurrentPrompt && !trimmedCurrentPromptText ? "Describe this image." : "");
 
     if (effectiveCurrentPromptText) {
       currentPromptPartsForAI.push({ text: effectiveCurrentPromptText });
     }
-    if (currentPhotoDataUri) {
-      currentPromptPartsForAI.push({ media: { url: currentPhotoDataUri } });
+    if (finalPhotoDataUriForCurrentPrompt) { // This is the potentially stripped photo URI
+      currentPromptPartsForAI.push({ media: { url: finalPhotoDataUriForCurrentPrompt } });
     }
 
-    // If there's no current prompt (neither text nor image) AND no history, then it's an empty request.
+    // If there's no current prompt content (neither text nor image after filtering) AND no history, then it's an empty request.
     if (currentPromptPartsForAI.length === 0 && pastMessagesForAI.length === 0) {
-        return { response: "Please provide a prompt or an image." };
+        return { response: "Please provide a prompt." };
     }
     
     // Construct GenerateOptions
-    // Note: Explicitly typing GenerateOptions can be tricky due to its generic nature with CustomOptions.
-    // Using 'any' here for simplicity, but in a larger project, you might define a more specific type.
     const generateOptions: GenerateOptions<any, any> = {
       model: model,
       prompt: currentPromptPartsForAI, // Current input as Part[]
